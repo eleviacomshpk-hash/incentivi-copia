@@ -1,0 +1,38 @@
+# Daily copy of incentivi.gov.it's catalog (MIMIT, open data IODL 2.0) for HelloWorker's radar
+# bandi. The portal refuses some networks (our server's among them) but answers GitHub's: this
+# job reads it once a day and publishes the open and upcoming bandi in the portal's own format.
+name: Copia del catalogo incentivi.gov.it
+on:
+  schedule:
+    - cron: "20 4 * * *"
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  copia:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Leggi il catalogo (una richiesta, fino a tre tentativi)
+        run: |
+          FIELDS="zs_nid,zs_title,zs_url,zs_body,zs_field_open_date,zs_field_close_date,zs_field_close_date_descriptor,zm_field_regions_value,zs_field_comuni,zm_field_dimensions_value,zm_field_subject_type_value,zm_field_scopes_value,zm_field_activity_sector_value,zm_field_support_form_value,zs_field_cost_max,zs_field_support_grant_type_max,zs_field_subject_grant,zs_field_link"
+          for attempt in 1 2 3; do
+            curl -sf --max-time 240 \
+              -A "HelloWorker/1.0 (riuso open data IODL 2.0, una lettura al giorno)" \
+              "https://www.incentivi.gov.it/solr/coredrupal/select?q=*:*&rows=10000&wt=json&fl=$FIELDS" \
+              -o all.json && break
+            sleep $((attempt * 20))
+          done
+          test "$(jq '.response.docs | length' all.json)" -gt 1000
+      - name: Tieni i bandi aperti o in arrivo
+        run: |
+          jq --arg today "$(date -u +%F)" '{source: "incentivi.gov.it (MIMIT), open data IODL 2.0", copied: (now | todate), response: {docs: [.response.docs[] | select(((.zs_field_close_date // "") >= $today) or ((.zs_field_close_date // "") == "" and (.zs_field_open_date // "") != ""))]}}' all.json > incentivi.json
+          test "$(jq '.response.docs | length' incentivi.json)" -gt 200
+          rm all.json
+      - name: Pubblica
+        run: |
+          git config user.name "HelloWorker"
+          git config user.email "studio@helloworker.ai"
+          git add incentivi.json
+          git diff --cached --quiet || git commit -m "Catalogo del $(date -u +%F)"
+          git push
